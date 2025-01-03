@@ -1,0 +1,264 @@
+"""
+NOVA - Neural Operating and Versatile Architecture (Open Source Edition)
+A lightweight, extensible framework for building adaptive AI systems.
+
+Author: Emmanuel Okenwa
+License: MIT
+"""
+
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional, Set
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+import json
+import numpy as np
+from collections import deque, defaultdict
+
+@dataclass
+class Knowledge:
+    """Represents a piece of knowledge in the system."""
+    content: str
+    category: str
+    confidence: float
+    timestamp: datetime = field(default_factory=datetime.now)
+    connections: Set[str] = field(default_factory=set)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+class NOVACore:
+    """
+    Core NOVA system for building adaptive AI applications.
+    Provides basic learning, memory, and reasoning capabilities.
+    """
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config or {}
+        self.logger = logging.getLogger("nova.core")
+        
+        # Initialize components
+        self.knowledge_base: Dict[str, Knowledge] = {}
+        self.short_term_memory: deque = deque(maxlen=1000)
+        self.learning_history: List[Dict[str, Any]] = []
+        
+        # System state
+        self.state = {
+            'initialized': False,
+            'learning_active': False,
+            'last_update': None
+        }
+        
+        # Setup data directory
+        self.data_dir = Path(self.config.get('data_dir', 'data/nova'))
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+    async def initialize(self) -> None:
+        """Initialize the NOVA system."""
+        try:
+            # Load existing knowledge if available
+            self._load_knowledge()
+            
+            # Start background tasks
+            self.state['learning_active'] = True
+            asyncio.create_task(self._continuous_learning())
+            
+            self.state['initialized'] = True
+            self.state['last_update'] = datetime.now()
+            self.logger.info("NOVA initialized successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Initialization failed: {str(e)}")
+            raise
+
+    async def learn(self, data: Any, category: str) -> Dict[str, Any]:
+        """Learn from input data."""
+        try:
+            # Extract features
+            features = self._extract_features(data)
+            
+            # Create knowledge
+            knowledge = Knowledge(
+                content=str(data),
+                category=category,
+                confidence=self._calculate_confidence(features),
+            )
+            
+            # Store knowledge
+            key = f"{category}:{datetime.now().isoformat()}"
+            self.knowledge_base[key] = knowledge
+            
+            # Update learning history
+            self.learning_history.append({
+                'timestamp': datetime.now().isoformat(),
+                'category': category,
+                'confidence': knowledge.confidence
+            })
+            
+            return {
+                'status': 'success',
+                'knowledge_key': key,
+                'confidence': knowledge.confidence
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Learning failed: {str(e)}")
+            return {'status': 'error', 'error': str(e)}
+
+    def query(self, category: str, confidence_threshold: float = 0.0) -> List[Knowledge]:
+        """Query knowledge by category and confidence."""
+        results = []
+        for knowledge in self.knowledge_base.values():
+            if (knowledge.category == category and 
+                knowledge.confidence >= confidence_threshold):
+                results.append(knowledge)
+        return results
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get system statistics."""
+        categories = defaultdict(int)
+        avg_confidence = 0.0
+        
+        for knowledge in self.knowledge_base.values():
+            categories[knowledge.category] += 1
+            avg_confidence += knowledge.confidence
+        
+        if self.knowledge_base:
+            avg_confidence /= len(self.knowledge_base)
+        
+        return {
+            'total_knowledge': len(self.knowledge_base),
+            'categories': dict(categories),
+            'average_confidence': avg_confidence,
+            'learning_sessions': len(self.learning_history)
+        }
+
+    def save_state(self, path: Optional[str] = None) -> None:
+        """Save system state to file."""
+        save_path = Path(path) if path else self.data_dir / 'nova_state.json'
+        
+        state = {
+            'timestamp': datetime.now().isoformat(),
+            'knowledge_base': {
+                k: {
+                    'content': v.content,
+                    'category': v.category,
+                    'confidence': v.confidence,
+                    'timestamp': v.timestamp.isoformat(),
+                    'connections': list(v.connections),
+                    'metadata': v.metadata
+                }
+                for k, v in self.knowledge_base.items()
+            },
+            'learning_history': self.learning_history,
+            'stats': self.get_stats()
+        }
+        
+        with open(save_path, 'w') as f:
+            json.dump(state, f, indent=2)
+
+    def load_state(self, path: Optional[str] = None) -> None:
+        """Load system state from file."""
+        load_path = Path(path) if path else self.data_dir / 'nova_state.json'
+        
+        if not load_path.exists():
+            return
+        
+        with open(load_path) as f:
+            state = json.load(f)
+            
+        self.knowledge_base = {
+            k: Knowledge(
+                content=v['content'],
+                category=v['category'],
+                confidence=v['confidence'],
+                timestamp=datetime.fromisoformat(v['timestamp']),
+                connections=set(v['connections']),
+                metadata=v['metadata']
+            )
+            for k, v in state['knowledge_base'].items()
+        }
+        
+        self.learning_history = state['learning_history']
+
+    async def _continuous_learning(self) -> None:
+        """Background learning process."""
+        while self.state['learning_active']:
+            try:
+                # Analyze and optimize knowledge
+                self._optimize_knowledge()
+                
+                # Save current state
+                self.save_state()
+                
+            except Exception as e:
+                self.logger.error(f"Continuous learning error: {str(e)}")
+            
+            await asyncio.sleep(3600)  # Run every hour
+
+    def _extract_features(self, data: Any) -> np.ndarray:
+        """Extract features from input data."""
+        if isinstance(data, str):
+            # Simple bag of words for text
+            words = data.lower().split()
+            return np.array([hash(w) % 1000 for w in words])
+        return np.array([])
+
+    def _calculate_confidence(self, features: np.ndarray) -> float:
+        """Calculate confidence score for features."""
+        if len(features) == 0:
+            return 0.0
+        return min(1.0, len(features) / 100)
+
+    def _optimize_knowledge(self) -> None:
+        """Optimize knowledge base."""
+        # Remove low-confidence duplicates
+        seen_content = {}
+        keys_to_remove = []
+        
+        for key, knowledge in self.knowledge_base.items():
+            if knowledge.content in seen_content:
+                existing = seen_content[knowledge.content]
+                if knowledge.confidence < existing.confidence:
+                    keys_to_remove.append(key)
+                else:
+                    keys_to_remove.append(existing.key)
+                    seen_content[knowledge.content] = knowledge
+            else:
+                seen_content[knowledge.content] = knowledge
+        
+        for key in keys_to_remove:
+            del self.knowledge_base[key]
+
+    def _load_knowledge(self) -> None:
+        """Load existing knowledge."""
+        try:
+            self.load_state()
+        except Exception as e:
+            self.logger.warning(f"Could not load existing knowledge: {str(e)}")
+
+# Example usage
+async def main():
+    # Initialize NOVA
+    nova = NOVACore({
+        'data_dir': 'data/nova',
+        'max_memory': 1000,
+        'confidence_threshold': 0.6
+    })
+    
+    # Start the system
+    await nova.initialize()
+    
+    # Learn something
+    await nova.learn("NOVA is a lightweight AI framework", "framework")
+    
+    # Query knowledge
+    results = nova.query("framework", confidence_threshold=0.5)
+    for knowledge in results:
+        print(f"Found: {knowledge.content} (confidence: {knowledge.confidence})")
+    
+    # Get statistics
+    stats = nova.get_stats()
+    print(f"System Stats: {stats}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
